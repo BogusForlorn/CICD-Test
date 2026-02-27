@@ -1,0 +1,14 @@
+apiVersion: v2
+name: devsecops-framework
+description: Automated DevSecOps CI/CD Security Pipeline
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Security Team
+keywords:
+  - devsecops
+  - security
+  - sast
+  - sca
+  - dast

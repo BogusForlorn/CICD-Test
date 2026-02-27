@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devsecops-dashboard
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: devsecops-dashboard
+spec:
+  replicas: {{ .Values.dashboard.replicaCount }}
+  selector:
+    matchLabels:
+      app: devsecops-dashboard
+  template:
+    metadata:
+      labels:
+        app: devsecops-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: RESULTS_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: results-bucket
+                  optional: true
+            - name: STORAGE_PROVIDER
+              value: "{{ .Values.global.storageProvider }}"
+          resources: {{ .Values.dashboard.resources | toYaml | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devsecops-dashboard
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: devsecops-dashboard
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: {{ .Values.dashboard.service.type }}

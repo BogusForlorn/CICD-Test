@@ -1,0 +1,84 @@
+# ============================================================
+# DevSecOps Security Gate Policy
+# Commit this file to each repo root to customise thresholds.
+# ============================================================
+
+policy:
+  version: "1.0"
+  fail_on:
+    - CRITICAL
+    - HIGH
+
+  tools:
+    semgrep:
+      enabled: true
+      configs:
+        - p/owasp-top-ten
+        - p/cwe-top-25
+        - p/python
+        - p/java
+        - p/javascript
+        - p/typescript
+        - p/golang
+        - p/php
+        - p/ruby
+
+    trivy:
+      enabled: true
+      # Covers: SCA (OS+language deps), Container, IaC (Dockerfile/K8s/Terraform), Secrets
+      severity_threshold: HIGH
+      ignore_unfixed: false
+      scanners:
+        - vuln       # SCA
+        - secret     # Filesystem/image secrets
+        - misconfig  # IaC misconfigurations
+
+    gitleaks:
+      enabled: true
+      redact: true   # Redact secret values in output
+
+    checkov:
+      enabled: true
+      # Comprehensive IaC: Terraform, CloudFormation, ARM, Helm, Ansible
+      frameworks:
+        - terraform
+        - cloudformation
+        - arm
+        - helm
+        - kubernetes
+        - dockerfile
+        - ansible
+      skip_check_ids: []
+
+    zap:
+      enabled: true
+      active_scan: true
+      ajax_spider: false
+      scan_timeout_minutes: 30
+
+  iast:
+    enabled: true
+    otel_collector_endpoint: "http://otel-collector:4318"
+
+  storage:
+    provider: s3          # s3 | azure_blob | local
+    bucket: ""
+    prefix: "security-reports"
+    retention_days: 90
+
+  defectdojo:
+    enabled: true
+    auto_close_old_findings: true
+
+  ai_remediation:
+    enabled: true
+    provider: anthropic
+    model: "claude-opus-4-6"
+    max_tokens: 1024
+    fallback_to_native: true
+
+  notifications:
+    slack:
+      enabled: false
+      webhook_url: ""
+      notify_on: [FAIL]

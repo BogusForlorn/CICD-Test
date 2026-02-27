@@ -1,0 +1,84 @@
+# ============================================================
+# DevSecOps Framework — Local / Docker mode
+# Start all services: docker compose up -d
+# ============================================================
+version: "3.9"
+
+services:
+
+  orchestrator:
+    build: ./orchestrator
+    image: devsecops/orchestrator:latest
+    ports:
+      - "8000:8000"
+    environment:
+      RUNNER_MODE: docker
+      AGGREGATOR_URL: http://aggregator:8001
+      DASHBOARD_URL: http://localhost:8080
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-}
+      RESULTS_BUCKET: ${RESULTS_BUCKET:-}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+      AI_API_KEY: ${AI_API_KEY:-}
+      DEFECTDOJO_URL: ${DEFECTDOJO_URL:-}
+      DEFECTDOJO_TOKEN: ${DEFECTDOJO_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - aggregator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  aggregator:
+    build: ./aggregator
+    image: devsecops/aggregator:latest
+    ports:
+      - "8001:8001"
+    environment:
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      AI_MODEL: ${AI_MODEL:-claude-opus-4-6}
+      RESULTS_BUCKET: ${RESULTS_BUCKET:-}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+      DEFECTDOJO_URL: ${DEFECTDOJO_URL:-}
+      DEFECTDOJO_TOKEN: ${DEFECTDOJO_TOKEN:-}
+      DASHBOARD_URL: http://dashboard:8080
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+    volumes:
+      - results-store:/results
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dashboard:
+    build: ./dashboard
+    image: devsecops/dashboard:latest
+    ports:
+      - "8080:8080"
+    environment:
+      RESULTS_BUCKET: ${RESULTS_BUCKET:-}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+    volumes:
+      - results-store:/results:ro
+    restart: unless-stopped
+
+  # Optional: DefectDojo (heavyweight — can use cloud-hosted instead)
+  # defectdojo:
+  #   image: defectdojo/defectdojo-django:latest
+  #   ports:
+  #     - "8888:8080"
+
+volumes:
+  results-store:

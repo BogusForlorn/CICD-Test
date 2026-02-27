@@ -1,0 +1,56 @@
+# Dynamic K8s Job template — rendered by orchestrator/job_launcher.py
+# This file documents the job structure; actual rendering is done in code.
+# Reference: orchestrator/job_launcher.py -> _render_k8s_job()
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "devsecops-scan-{SCAN_ID}"
+  namespace: devsecops
+  labels:
+    app: devsecops-scanner
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    spec:
+      serviceAccountName: devsecops-scanner
+      restartPolicy: Never
+      initContainers:
+        - name: git-clone
+          image: alpine/git:latest
+          command:
+            - sh
+            - -c
+            - "git clone --depth=50 {REPO_URL} /workspace && cd /workspace && git checkout {PR_SHA}"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      containers:
+        - name: scanner
+          image: devsecops/scanner:latest
+          env:
+            - name: SCAN_ID
+              value: "{SCAN_ID}"
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: api-token
+            - name: AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: ai-api-key
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: results
+              mountPath: /results
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "3Gi" }
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: results
+          emptyDir: {}

@@ -1,0 +1,45 @@
+# ============================================================
+# Ephemeral staging environment for DAST/IAST testing.
+# Started and stopped by the scanner during ZAP scan.
+# Customise the 'app' service for your application.
+# ============================================================
+version: "3.9"
+
+services:
+
+  # ── Your application under test ────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      ENV: staging
+      DATABASE_URL: postgresql://testuser:testpass@db:5432/testdb
+    depends_on:
+      - db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── Test database ───────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdb
+
+  # ── OpenTelemetry collector (IAST) ─────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+      - "55680:55680"  # OpenCensus
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml

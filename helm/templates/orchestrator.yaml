@@ -1,0 +1,128 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devsecops-orchestrator
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: devsecops-orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicaCount }}
+  selector:
+    matchLabels:
+      app: devsecops-orchestrator
+  template:
+    metadata:
+      labels:
+        app: devsecops-orchestrator
+    spec:
+      serviceAccountName: devsecops-orchestrator
+      containers:
+        - name: orchestrator
+          image: "{{ .Values.orchestrator.image.repository }}:{{ .Values.orchestrator.image.tag }}"
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: RUNNER_MODE
+              value: "{{ .Values.global.runnerMode }}"
+            - name: DASHBOARD_URL
+              value: "{{ .Values.global.dashboardUrl }}"
+            - name: AGGREGATOR_URL
+              value: "http://devsecops-aggregator:8001"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: github-token
+                  optional: true
+            - name: GITLAB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: gitlab-token
+                  optional: true
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: github-webhook-secret
+                  optional: true
+            - name: GITLAB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: gitlab-webhook-secret
+                  optional: true
+            - name: RESULTS_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: results-bucket
+                  optional: true
+            - name: AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: ai-api-key
+                  optional: true
+            - name: DEFECTDOJO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: defectdojo-url
+                  optional: true
+            - name: DEFECTDOJO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-secrets
+                  key: defectdojo-token
+                  optional: true
+          resources: {{ .Values.orchestrator.resources | toYaml | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devsecops-orchestrator
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: devsecops-orchestrator
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: {{ .Values.orchestrator.service.type }}
+---
+{{- if .Values.orchestrator.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: devsecops-orchestrator-hpa
+  namespace: {{ .Values.global.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: devsecops-orchestrator
+  minReplicas: {{ .Values.orchestrator.hpa.minReplicas }}
+  maxReplicas: {{ .Values.orchestrator.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.orchestrator.hpa.cpuTargetPercent }}
+{{- end }}

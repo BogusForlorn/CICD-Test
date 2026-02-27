@@ -1,0 +1,87 @@
+# ============================================================
+# DevSecOps Framework — Helm Values
+# ============================================================
+
+global:
+  namespace: devsecops
+  runnerMode: kubernetes    # kubernetes | docker
+  storageProvider: s3       # s3 | azure_blob | local
+  dashboardUrl: ""          # e.g. https://devsecops.yourcompany.com
+
+# Orchestrator (webhook receiver)
+orchestrator:
+  replicaCount: 2
+  image:
+    repository: devsecops/orchestrator
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 8000
+  ingress:
+    enabled: true
+    host: ""                # e.g. hooks.yourcompany.com
+    tlsSecretName: ""
+  resources:
+    requests: { cpu: "200m", memory: "256Mi" }
+    limits:   { cpu: "1",    memory: "512Mi" }
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuTargetPercent: 70
+
+# Aggregator (AI remediation + decision)
+aggregator:
+  replicaCount: 2
+  image:
+    repository: devsecops/aggregator
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 8001
+  resources:
+    requests: { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "2Gi" }
+
+# Dashboard
+dashboard:
+  replicaCount: 2
+  image:
+    repository: devsecops/dashboard
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: true
+    host: ""                # e.g. devsecops.yourcompany.com
+    tlsSecretName: ""
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
+
+# Scanner job (ephemeral — launched per PR)
+scanner:
+  image:
+    repository: devsecops/scanner
+    tag: latest
+    pullPolicy: Always
+
+# Secrets (values must be provided via --set or external secrets manager)
+secrets:
+  githubToken: ""
+  gitlabToken: ""
+  githubWebhookSecret: ""
+  gitlabWebhookSecret: ""
+  aiApiKey: ""
+  resultsBucket: ""
+  defectdojoUrl: ""
+  defectdojoToken: ""
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""
+  awsDefaultRegion: "us-east-1"
+  azureStorageConnectionString: ""
+  slackWebhookUrl: ""
