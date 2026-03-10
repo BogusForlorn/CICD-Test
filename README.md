@@ -92,6 +92,20 @@ Webhook → Orchestrator → K8s Job (or Docker)
     PR BLOCKED — cannot merge    Human operator reviews + approves
 ```
 
+## Findings Enrichment
+
+- Remediation suggestion is included per finding, prioritising AI remediation steps with native-tool fallback.
+- CVSS severity is normalised per finding:
+  - Uses native tool CVSS when available.
+  - If missing, calls the LLM API twice to estimate CVSS and performs strict string comparison.
+  - If both CVSS strings match, the verified score/vector/severity are used.
+  - If they do not match, the finding is marked `(unable to estimate cvss)` and both returned CVSS strings are kept in the report.
+- CVE handling includes:
+  - CVE ID extraction from scanner findings.
+  - CVE test methods mapped to the detecting tool.
+  - PoC guidance per CVE finding (reference-based when available, otherwise generated/fallback).
+- Dashboard reporting includes CVE + PoC entries for each scan and exposes a JSON endpoint at `/scan/{scan_id}/cves`.
+
 ## Configuration
 
 Each repo can override defaults by committing `security-policy.yaml` to its root.
@@ -103,7 +117,7 @@ See the included `security-policy.yaml` for all options.
 |---|---|
 | `GITHUB_TOKEN` / `GITLAB_TOKEN` | Personal Access Token with repo + PR write access |
 | `GITHUB_WEBHOOK_SECRET` | HMAC secret for webhook validation |
-| `AI_API_KEY` | Anthropic API key for AI remediation |
+| `AI_API_KEY` | API key used for AI remediation, CVSS estimation, and CVE PoC generation |
 | `RESULTS_BUCKET` | S3 bucket or Azure container for JSON reports |
 | `DEFECTDOJO_URL` + `DEFECTDOJO_TOKEN` | Optional DefectDojo integration |
 

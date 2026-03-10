@@ -11,9 +11,10 @@ FastAPI service that:
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import boto3
 import requests
@@ -38,6 +39,7 @@ STORAGE_PROVIDER = os.environ.get("STORAGE_PROVIDER", "s3")  # s3 | azure_blob |
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
 DEFECTDOJO_URL = os.environ.get("DEFECTDOJO_URL", "")
 DEFECTDOJO_TOKEN = os.environ.get("DEFECTDOJO_TOKEN", "")
+CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 
 
 @app.get("/health")
@@ -63,20 +65,58 @@ async def aggregate(payload: dict):
     findings = _deduplicate(raw_findings)
     log.info("After deduplication: %d unique findings", len(findings))
 
-    # ── 2. AI Remediation (1:1 — one call per finding) ──────────────────────
+    # ── 2. Enrich findings: remediation + CVSS + CVE/PoC ────────────────────
     ai_enabled = policy.get("ai_remediation", {}).get("enabled", True) and bool(AI_API_KEY)
-    if ai_enabled:
-        agent = AIRemediationAgent(AI_API_KEY, AI_PROVIDER, AI_MODEL)
-        for i, finding in enumerate(findings):
-            log.info("AI remediation [%d/%d] — %s %s", i+1, len(findings),
-                     finding["tool"], finding.get("rule_id", ""))
+    cve_poc_enabled = policy.get("cve_testing", {}).get("enabled", True)
+    cve_methods_config = policy.get("cve_testing", {}).get("methods", {})
+    cvss_enabled = policy.get("cvss", {}).get("enabled", True)
+    agent = AIRemediationAgent(AI_API_KEY, AI_PROVIDER, AI_MODEL) if ai_enabled else None
+
+    for i, finding in enumerate(findings):
+        if ai_enabled and agent:
+            log.info(
+                "AI remediation [%d/%d] — %s %s",
+                i + 1,
+                len(findings),
+                finding.get("tool", ""),
+                finding.get("rule_id", ""),
+            )
             finding["ai_remediation"] = agent.remediate(finding)
-    else:
-        for finding in findings:
+        else:
             finding["ai_remediation"] = {
                 "remediation_status": "ai_disabled",
                 "remediation_steps": [finding.get("native_remediation", "See tool documentation.")],
             }
+
+        finding["remediation_suggestion"] = _build_remediation_suggestion(finding)
+
+        cvss_assessment = _resolve_cvss_assessment(
+            finding=finding,
+            agent=agent,
+            ai_enabled=ai_enabled,
+            cvss_enabled=cvss_enabled,
+        )
+        finding["cvss_assessment"] = cvss_assessment
+        if cvss_assessment.get("severity"):
+            finding["severity_from_cvss"] = cvss_assessment["severity"]
+            finding["severity"] = cvss_assessment["severity"]
+
+        cves = _extract_cves(finding)
+        finding["cves"] = cves
+        finding["cve_test_methods"] = (
+            _cve_test_methods_for_finding(finding, cve_methods_config) if cves else []
+        )
+
+        if cves and cve_poc_enabled:
+            ref_poc = _reference_based_poc(finding, cves)
+            if ref_poc:
+                finding["cve_poc"] = ref_poc
+            elif ai_enabled and agent:
+                finding["cve_poc"] = agent.generate_cve_poc(finding, cves)
+            else:
+                finding["cve_poc"] = _fallback_poc(cves, finding)
+        else:
+            finding["cve_poc"] = None
 
     # ── 3. Stamp findings with IDs and context ───────────────────────────────
     ts = datetime.now(timezone.utc).isoformat()
@@ -100,6 +140,7 @@ async def aggregate(payload: dict):
     # ── 6. Build full decision object ────────────────────────────────────────
     critical_high = [f for f in findings
                      if f.get("severity", "").upper() in ("CRITICAL", "HIGH")]
+    cve_poc_entries = _build_cve_poc_entries(findings)
 
     decision = {
         "scan_id": scan_id,
@@ -110,20 +151,26 @@ async def aggregate(payload: dict):
         "branch": context["branch"],
         "result": decision_data["result"],
         "total_findings": decision_data["total_findings"],
+        "critical_high_count": len(critical_high),
         "critical_high_findings": critical_high,
+        "cve_findings_count": len([f for f in findings if f.get("cves")]),
+        "cve_poc_entries": cve_poc_entries,
         "all_findings": findings,
         "failed_tools": decision_data["failed_tools"],
         "tool_summary": decision_data["tool_summary"],
-        "dashboard_url": f"{DASHBOARD_URL}/scan/{scan_id}" if DASHBOARD_URL else "",
+        "dashboard_url": f"{DASHBOARD_URL.rstrip('/')}/scan/{scan_id}" if DASHBOARD_URL else "",
         "report_url": report_url,
         "timestamp": ts,
     }
 
-    # ── 7. Push to DefectDojo ────────────────────────────────────────────────
+    # ── 7. Push summary to dashboard ─────────────────────────────────────────
+    _post_to_dashboard(scan_id, decision)
+
+    # ── 8. Push to DefectDojo ────────────────────────────────────────────────
     if DEFECTDOJO_URL and DEFECTDOJO_TOKEN:
         _push_to_defectdojo(findings, context, decision)
 
-    # ── 8. Post to Git (PR comment + status check) ───────────────────────────
+    # ── 9. Post to Git (PR comment + status check) ───────────────────────────
     commenter = PRCommenter(
         platform=context["platform"],
         api_token=os.environ.get("API_TOKEN", ""),
@@ -148,6 +195,257 @@ def _deduplicate(findings: list) -> list:
             seen.add(key)
             unique.append(f)
     return unique
+
+
+def _build_remediation_suggestion(finding: dict) -> str:
+    ai = finding.get("ai_remediation") or {}
+    steps = ai.get("remediation_steps", []) if isinstance(ai, dict) else []
+    if steps:
+        return " ".join(str(s).strip() for s in steps[:2])[:400]
+    native = (finding.get("native_remediation") or "").strip()
+    if native:
+        return native[:400]
+    return "Review the finding details and apply the tool-recommended fix."
+
+
+def _severity_from_cvss(score: float) -> str:
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    if score > 0.0:
+        return "LOW"
+    return "INFO"
+
+
+def _extract_native_cvss(finding: dict) -> dict:
+    cvss = finding.get("cvss")
+    if not isinstance(cvss, dict) or not cvss:
+        return {}
+
+    best = {}
+    best_score = -1.0
+    for source, data in cvss.items():
+        if not isinstance(data, dict):
+            continue
+        raw_score = data.get("V3Score", data.get("Score", data.get("score")))
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if score > best_score:
+            best_score = score
+            vector = (
+                data.get("V3Vector")
+                or data.get("Vector")
+                or data.get("VectorString")
+                or data.get("vector")
+                or ""
+            )
+            severity = (
+                str(data.get("Severity", data.get("severity", ""))).upper().strip()
+                or _severity_from_cvss(score)
+            )
+            best = {
+                "status": "native",
+                "source": "tool_native",
+                "cvss_provider": source,
+                "score": round(score, 1),
+                "vector": vector,
+                "severity": severity,
+            }
+    return best
+
+
+def _resolve_cvss_assessment(
+    finding: dict,
+    agent: Optional[AIRemediationAgent],
+    ai_enabled: bool,
+    cvss_enabled: bool,
+) -> dict:
+    if not cvss_enabled:
+        return {
+            "status": "disabled",
+            "source": "policy",
+            "reason": "cvss_enrichment_disabled",
+        }
+
+    native = _extract_native_cvss(finding)
+    if native:
+        return native
+
+    if not ai_enabled or not agent:
+        return {
+            "status": "unable_to_estimate",
+            "source": "none",
+            "reason": "ai_disabled_and_no_native_cvss",
+            "highlight": "(unable to estimate cvss)",
+        }
+
+    estimated = agent.estimate_cvss_with_verification(finding)
+    if estimated.get("status") != "verified":
+        estimated["highlight"] = "(unable to estimate cvss)"
+    return estimated
+
+
+def _extract_cves(finding: dict) -> List[str]:
+    texts = [
+        str(finding.get("rule_id", "")),
+        str(finding.get("title", "")),
+        str(finding.get("description", "")),
+    ]
+    refs = finding.get("references", [])
+    if isinstance(refs, list):
+        texts.extend(str(r) for r in refs)
+
+    cves = set()
+    for txt in texts:
+        for match in CVE_PATTERN.findall(txt or ""):
+            cves.add(match.upper())
+    return sorted(cves)
+
+
+def _cve_test_methods_for_finding(finding: dict, configured_methods: dict) -> List[str]:
+    tool = (finding.get("tool") or "").lower()
+    if isinstance(configured_methods, dict):
+        cfg = configured_methods.get(tool)
+        if isinstance(cfg, list) and cfg:
+            return [str(x) for x in cfg]
+
+    methods = {
+        "trivy": [
+            "Dependency/package version validation with Trivy SCA rescan",
+            "Container image vulnerability replay with Trivy image scanner",
+        ],
+        "zap": [
+            "Runtime endpoint validation with OWASP ZAP active/baseline scan",
+            "HTTP response/evidence comparison before and after remediation",
+        ],
+        "semgrep": [
+            "Code-path validation for vulnerable patterns with Semgrep rules",
+            "Targeted unit/integration tests around affected code flow",
+        ],
+        "checkov": [
+            "IaC misconfiguration verification by re-running Checkov policies",
+            "Deployment manifest diff validation before apply",
+        ],
+        "gitleaks": [
+            "Secret exposure replay via git history scan with Gitleaks",
+            "Credential revocation and repository re-scan verification",
+        ],
+    }
+    return methods.get(tool, ["Re-run the detecting scanner and verify the vulnerable artifact is no longer present."])
+
+
+def _reference_based_poc(finding: dict, cves: list) -> dict:
+    refs = finding.get("references", [])
+    if not isinstance(refs, list):
+        return {}
+
+    poc_refs = []
+    for ref in refs:
+        ref_str = str(ref).strip()
+        lower = ref_str.lower()
+        if any(k in lower for k in ("poc", "proof", "exploit-db", "github.com")):
+            poc_refs.append(ref_str)
+    if not poc_refs:
+        return {}
+
+    return {
+        "status": "reference_based",
+        "poc_status": "ready",
+        "poc_title": f"Reference-based validation for {', '.join(cves[:2])}",
+        "verification_steps": [
+            "Use the listed PoC/reference in an isolated staging environment.",
+            "Validate the vulnerable package/component version and affected endpoint/code path.",
+            "Apply remediation and re-run the scanner to verify closure.",
+        ],
+        "safety_notes": [
+            "Run PoC validation only in non-production environments.",
+            "Use least privilege credentials and disposable test data.",
+        ],
+        "references": poc_refs[:5],
+    }
+
+
+def _fallback_poc(cves: list, finding: dict) -> dict:
+    return {
+        "status": "fallback",
+        "poc_status": "ready",
+        "poc_title": f"Scanner-driven validation for {', '.join(cves[:2])}",
+        "verification_steps": [
+            f"Confirm affected artifact in {finding.get('file', 'reported target')} with the reported scanner output.",
+            "Recreate the vulnerable condition in staging using the same version/configuration.",
+            "Apply fix and execute the same scan command to confirm the CVE is no longer detected.",
+        ],
+        "safety_notes": [
+            "Do not execute CVE validation in production.",
+            "Record test evidence and keep rollback capability.",
+        ],
+        "references": finding.get("references", [])[:3] if isinstance(finding.get("references"), list) else [],
+    }
+
+
+def _build_cve_poc_entries(findings: list) -> list:
+    entries = []
+    for f in findings:
+        cves = f.get("cves") or []
+        if not cves:
+            continue
+        cvss = f.get("cvss_assessment") or {}
+        poc = f.get("cve_poc") or {}
+        entries.append(
+            {
+                "finding_id": f.get("finding_id", ""),
+                "tool": f.get("tool", ""),
+                "severity": f.get("severity", ""),
+                "file": f.get("file", ""),
+                "title": f.get("title", ""),
+                "cves": cves,
+                "cve_test_methods": f.get("cve_test_methods", []),
+                "cvss_status": cvss.get("status", ""),
+                "cvss_score": cvss.get("score"),
+                "cvss_vector": cvss.get("vector", ""),
+                "cvss_highlight": cvss.get("highlight", ""),
+                "cvss_string_1": cvss.get("cvss_string_1", ""),
+                "cvss_string_2": cvss.get("cvss_string_2", ""),
+                "poc_status": poc.get("poc_status", "not_available"),
+                "poc_title": poc.get("poc_title", ""),
+                "poc_steps": poc.get("verification_steps", []),
+                "poc_references": poc.get("references", []),
+            }
+        )
+    return entries
+
+
+def _post_to_dashboard(scan_id: str, decision: dict):
+    if not DASHBOARD_URL:
+        return
+
+    url = f"{DASHBOARD_URL.rstrip('/')}/scan/{scan_id}"
+    payload = {
+        "scan_id": decision["scan_id"],
+        "repo_full_name": decision["repo_full_name"],
+        "pr_number": decision["pr_number"],
+        "branch": decision["branch"],
+        "result": decision["result"],
+        "total_findings": decision["total_findings"],
+        "critical_high_count": decision.get("critical_high_count", 0),
+        "failed_tools": decision.get("failed_tools", []),
+        "tool_summary": decision.get("tool_summary", {}),
+        "report_url": decision.get("report_url", ""),
+        "timestamp": decision.get("timestamp", ""),
+        "cve_findings_count": decision.get("cve_findings_count", 0),
+        "cve_poc_entries": decision.get("cve_poc_entries", []),
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=30)
+        if resp.status_code not in (200, 201):
+            log.error("Dashboard ingest failed [%d]: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        log.error("Dashboard ingest failed: %s", e)
 
 
 def _upload_report(scan_id: str, findings: list, decision: dict, context: dict) -> str:

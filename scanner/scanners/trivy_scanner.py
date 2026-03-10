@@ -112,6 +112,7 @@ class TrivyScanner:
 
             # IaC Misconfigurations
             for misconfig in result.get("Misconfigurations", []) or []:
+                refs = misconfig.get("References", []) or []
                 findings.append({
                     "tool": self.TOOL,
                     "category": "IaC",
@@ -123,7 +124,7 @@ class TrivyScanner:
                     "line": misconfig.get("CauseMetadata", {}).get("StartLine"),
                     "code_snippet": misconfig.get("Message", ""),
                     "native_remediation": misconfig.get("Resolution", ""),
-                    "references": [ref.get("URL", "") for ref in misconfig.get("References", [])],
+                    "references": [ref if isinstance(ref, str) else ref.get("URL", "") for ref in refs],
                     "raw": misconfig,
                 })
 

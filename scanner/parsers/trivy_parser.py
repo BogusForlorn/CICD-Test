@@ -30,6 +30,7 @@ def _parse_trivy(path: str, default_category: str) -> List[Dict[str, Any]]:
                 "description": vuln.get("Description", ""),
                 "file": target, "line": None,
                 "code_snippet": f"Package: {vuln.get('PkgName','')} {vuln.get('InstalledVersion','')} -> Fix: {vuln.get('FixedVersion','N/A')}",
+                "cvss": vuln.get("CVSS", {}),
                 "native_remediation": f"Upgrade {vuln.get('PkgName','')} to {vuln.get('FixedVersion', 'latest')}",
                 "references": vuln.get("References", [])[:5],
                 "raw": vuln,
@@ -47,6 +48,7 @@ def _parse_trivy(path: str, default_category: str) -> List[Dict[str, Any]]:
                 "references": [], "raw": secret,
             })
         for mc in result.get("Misconfigurations", []) or []:
+            refs = mc.get("References", []) or []
             findings.append({
                 "tool": "trivy", "category": "IaC",
                 "rule_id": mc.get("ID", ""),
@@ -57,7 +59,7 @@ def _parse_trivy(path: str, default_category: str) -> List[Dict[str, Any]]:
                 "line": mc.get("CauseMetadata", {}).get("StartLine"),
                 "code_snippet": mc.get("Message", ""),
                 "native_remediation": mc.get("Resolution", ""),
-                "references": [r.get("URL", "") for r in mc.get("References", [])],
+                "references": [r if isinstance(r, str) else r.get("URL", "") for r in refs],
                 "raw": mc,
             })
     return findings

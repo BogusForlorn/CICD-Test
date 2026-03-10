@@ -77,6 +77,34 @@ policy:
     max_tokens: 1024
     fallback_to_native: true
 
+  cvss:
+    enabled: true
+    use_native_when_available: true
+    estimate_with_llm_if_missing: true
+    verify_with_double_call: true
+    on_mismatch: "mark_unable_to_estimate"
+
+  cve_testing:
+    enabled: true
+    include_poc_in_reports: true
+    include_poc_on_dashboard: true
+    methods:
+      trivy:
+        - "Dependency/package version validation with Trivy rescan"
+        - "Container image replay scanning for vulnerable package versions"
+      semgrep:
+        - "Code path verification tests for vulnerable usage patterns"
+        - "Rule replay after patching to confirm detection closure"
+      checkov:
+        - "IaC policy replay in CI for vulnerable/misconfigured resources"
+        - "Manifest/template diff validation before deployment"
+      zap:
+        - "Runtime endpoint validation in staging with active or baseline scan"
+        - "Evidence comparison (request/response) pre and post remediation"
+      gitleaks:
+        - "Repository history replay scan for exposed credentials"
+        - "Credential revocation and re-scan verification"
+
   notifications:
     slack:
       enabled: false

@@ -42,6 +42,8 @@ async def ingest_scan(scan_id: str, payload: dict):
         "failed_tools": payload.get("failed_tools", []),
         "tool_summary": payload.get("tool_summary", {}),
         "report_url": payload.get("report_url", ""),
+        "cve_findings_count": payload.get("cve_findings_count", 0),
+        "cve_poc_entries": payload.get("cve_poc_entries", []),
         "timestamp": payload.get("timestamp", datetime.utcnow().isoformat()),
     }
     return JSONResponse({"status": "registered"})
@@ -52,6 +54,20 @@ async def get_scan(scan_id: str):
     if scan_id not in _scans:
         return JSONResponse({"error": "Scan not found"}, status_code=404)
     return _scans[scan_id]
+
+
+@app.get("/scan/{scan_id}/cves", response_class=JSONResponse)
+async def get_scan_cves(scan_id: str):
+    if scan_id not in _scans:
+        return JSONResponse({"error": "Scan not found"}, status_code=404)
+    scan = _scans[scan_id]
+    return {
+        "scan_id": scan_id,
+        "repo": scan.get("repo", ""),
+        "pr_number": scan.get("pr_number", ""),
+        "cve_findings_count": scan.get("cve_findings_count", 0),
+        "cve_poc_entries": scan.get("cve_poc_entries", []),
+    }
 
 
 @app.get("/scans", response_class=JSONResponse)
@@ -88,10 +104,27 @@ def _render_dashboard() -> str:
           <td><code>{s['branch']}</code></td>
           <td>{status_label}</td>
           <td>{s['total_findings']}</td>
+          <td>{s.get('cve_findings_count', 0)}</td>
           <td>{s.get('timestamp', '')[:19]}</td>
+          <td><a href="/scan/{s['scan_id']}/cves">CVE/PoC</a></td>
           <td><a href="{s.get('report_url', '#')}">JSON Report</a></td>
         </tr>
         """
+
+    cve_rows = ""
+    for s in scans[:20]:
+        for entry in (s.get("cve_poc_entries") or [])[:10]:
+            cve_rows += f"""
+            <tr>
+              <td><code>{s['scan_id']}</code></td>
+              <td>{s['repo']}</td>
+              <td>{', '.join(entry.get('cves', [])[:3])}</td>
+              <td>{entry.get('severity', '')}</td>
+              <td>{'; '.join(entry.get('cve_test_methods', [])[:1])}</td>
+              <td>{entry.get('poc_status', '')}</td>
+              <td>{entry.get('poc_title', '')[:80]}</td>
+            </tr>
+            """
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -122,10 +155,19 @@ def _render_dashboard() -> str:
 <thead>
   <tr>
     <th>Scan ID</th><th>Repository</th><th>PR</th><th>Branch</th>
-    <th>Status</th><th>Findings</th><th>Timestamp</th><th>Report</th>
+    <th>Status</th><th>Findings</th><th>CVE+PoC</th><th>Timestamp</th><th>CVE Detail</th><th>Report</th>
   </tr>
 </thead>
 <tbody>{rows}</tbody>
+</table>
+<h2 style="margin-top:32px;">CVE + PoC Findings (Latest Scans)</h2>
+<table>
+<thead>
+  <tr>
+    <th>Scan ID</th><th>Repository</th><th>CVEs</th><th>Severity</th><th>Test Method</th><th>PoC Status</th><th>PoC Title</th>
+  </tr>
+</thead>
+<tbody>{cve_rows}</tbody>
 </table>
 </body>
 </html>"""

@@ -91,72 +91,76 @@ class PRCommenter:
     def _build_fail_comment(self, decision: dict) -> str:
         failed_tools = ", ".join(decision.get("failed_tools", []))
         lines = [
-            "## ❌ DevSecOps Security Gate — **FAILED**
-",
-            f"**Scan ID:** `{decision['scan_id']}`  
-",
-            f"**Branch:** `{decision['branch']}`  
-",
-            f"**Tools Failed:** {failed_tools}  
-
-",
-            "---
-",
-            "### 🔴 Critical / High Findings
-
-",
-            "| # | Severity | Tool | Category | File | Line | Issue | AI Remediation Summary |
-",
-            "|---|---|---|---|---|---|---|---|
-",
+            "## ❌ DevSecOps Security Gate — **FAILED**\n",
+            f"**Scan ID:** `{decision['scan_id']}`\n",
+            f"**Branch:** `{decision['branch']}`\n",
+            f"**Tools Failed:** {failed_tools}\n\n",
+            "---\n",
+            "### 🔴 Critical / High Findings\n\n",
+            "| # | Severity | Tool | Category | File | Line | Issue | Remediation Suggestion | CVSS | CVE / PoC |\n",
+            "|---|---|---|---|---|---|---|---|---|---|\n",
         ]
 
+        mismatched_cvss = []
         for i, f in enumerate(decision.get("critical_high_findings", []), 1):
-            ai = f.get("ai_remediation", {})
-            steps = ai.get("remediation_steps", [])
-            # Show first step as inline summary; full steps in JSON report
-            first_step = steps[0] if steps else (f.get("native_remediation") or "See full report")[:120]
+            suggestion = (f.get("remediation_suggestion") or f.get("native_remediation") or "See full report")[:100]
             file_short = (f.get("file") or "")[-60:]  # Truncate long paths
+            cvss = f.get("cvss_assessment", {}) or {}
+            cvss_status = cvss.get("status", "")
+            if cvss_status in ("native", "verified"):
+                cvss_str = f"{cvss.get('score', 'n/a')} ({cvss.get('severity', '')})"
+            else:
+                cvss_str = cvss.get("highlight", "(unable to estimate cvss)")
+                if cvss.get("cvss_string_1") or cvss.get("cvss_string_2"):
+                    mismatched_cvss.append(
+                        {
+                            "id": i,
+                            "cvss_string_1": cvss.get("cvss_string_1", ""),
+                            "cvss_string_2": cvss.get("cvss_string_2", ""),
+                        }
+                    )
+
+            cves = f.get("cves") or []
+            poc = f.get("cve_poc") or {}
+            cve_cell = "—"
+            if cves:
+                cve_cell = f"{', '.join(cves[:2])} | PoC: {poc.get('poc_status', 'not_available')}"
             lines.append(
                 f"| {i} | **{f['severity']}** | {f['tool']} | {f['category']} "
                 f"| `{file_short}` | {f.get('line') or '—'} "
-                f"| {(f.get('title') or '')[:80]} | {first_step[:100]} |
-"
+                f"| {(f.get('title') or '')[:80]} | {suggestion} | {cvss_str[:60]} | {cve_cell[:60]} |\n"
             )
 
-        lines += [
-            "
----
-",
-            "### 📋 Tool Results Summary
+        if mismatched_cvss:
+            lines += [
+                "\n### ⚠️ CVSS Verification Mismatch\n",
+                "The following findings are marked **(unable to estimate cvss)** because the two API CVSS strings did not match.\n\n",
+            ]
+            for mismatch in mismatched_cvss:
+                lines.append(
+                    f"- Finding #{mismatch['id']}: `cvss_string_1={mismatch['cvss_string_1'][:120]}` "
+                    f"`cvss_string_2={mismatch['cvss_string_2'][:120]}`\n"
+                )
 
-",
-            "| Tool | Status | Findings | Max Severity |
-",
-            "|---|---|---|---|
-",
+        lines += [
+            "\n---\n",
+            "### 📋 Tool Results Summary\n\n",
+            "| Tool | Status | Findings | Max Severity |\n",
+            "|---|---|---|---|\n",
         ]
         for tool, summary in decision.get("tool_summary", {}).items():
             status_icon = "❌" if summary["status"] == "FAIL" else ("⏭️" if summary["status"] == "SKIPPED" else "✅")
             lines.append(
                 f"| {tool} | {status_icon} {summary['status']} "
-                f"| {summary['total_findings']} | {summary['max_severity']} |
-"
+                f"| {summary['total_findings']} | {summary['max_severity']} |\n"
             )
 
         lines += [
-            "
----
-",
-            f"📊 **[View Full Report & AI Remediation Steps]({decision.get('report_url', '')})**  
-",
-            f"🔍 **[Dashboard]({decision.get('dashboard_url', '')})**  
-
-",
-            "> ⚠️ **This PR has been blocked.** Fix all HIGH/CRITICAL findings and push a new commit.
-",
-            "> All remediation steps are in the full report JSON linked above.
-",
+            "\n---\n",
+            f"📊 **[View Full Report & AI Remediation Steps]({decision.get('report_url', '')})**\n",
+            f"🔍 **[Dashboard]({decision.get('dashboard_url', '')})**\n\n",
+            "> ⚠️ **This PR has been blocked.** Fix all HIGH/CRITICAL findings and push a new commit.\n",
+            "> The full report includes remediation suggestions, CVSS verification details, and CVE PoC data.\n",
         ]
         return "".join(lines)
 
@@ -166,45 +170,24 @@ class PRCommenter:
             icon = "⏭️" if summary["status"] == "SKIPPED" else "✅"
             tool_rows.append(
                 f"| {tool} | {icon} {summary['status']} "
-                f"| {summary['total_findings']} | {summary['max_severity']} |
-"
+                f"| {summary['total_findings']} | {summary['max_severity']} |\n"
             )
 
         return (
-            "## ✅ DevSecOps Security Gate — **PASSED**
-
-"
-            f"**Scan ID:** `{decision['scan_id']}`  
-"
-            f"**Branch:** `{decision['branch']}`  
-
-"
-            "All security tools completed with **no HIGH or CRITICAL findings**.
-
-"
-            "---
-"
-            "### 🛡️ Tool Results
-
-"
-            "| Tool | Status | Findings | Max Severity |
-"
-            "|---|---|---|---|
-"
+            "## ✅ DevSecOps Security Gate — **PASSED**\n\n"
+            f"**Scan ID:** `{decision['scan_id']}`\n"
+            f"**Branch:** `{decision['branch']}`\n\n"
+            "All security tools completed with **no HIGH or CRITICAL findings**.\n\n"
+            "---\n"
+            "### 🛡️ Tool Results\n\n"
+            "| Tool | Status | Findings | Max Severity |\n"
+            "|---|---|---|---|\n"
             + "".join(tool_rows) +
-            "
----
-"
-            "### 🔒 Status: Awaiting Human Approval
-
-"
-            "> ✋ **This PR has NOT been auto-merged.** A security team member must review
-"
-            "> the full report and approve this PR manually in the GitHub/GitLab UI.
-
-"
-            f"📊 **[View Full Scan Report]({decision.get('report_url', '')})**  
-"
-            f"🔍 **[Dashboard]({decision.get('dashboard_url', '')})**  
-"
+            "\n---\n"
+            "### 🔒 Status: Awaiting Human Approval\n\n"
+            "> ✋ **This PR has NOT been auto-merged.** A security team member must review\n"
+            "> the full report and approve this PR manually in the GitHub/GitLab UI.\n\n"
+            f"**CVE findings with PoC in this scan:** {decision.get('cve_findings_count', 0)}\n\n"
+            f"📊 **[View Full Scan Report]({decision.get('report_url', '')})**\n"
+            f"🔍 **[Dashboard]({decision.get('dashboard_url', '')})**\n"
         )

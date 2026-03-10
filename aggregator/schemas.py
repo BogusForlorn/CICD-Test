@@ -25,8 +25,14 @@ class Finding(BaseModel):
     code_snippet: Optional[str] = None
     native_remediation: Optional[str] = None
     ai_remediation: Optional[Dict[str, Any]] = None
+    remediation_suggestion: Optional[str] = None
     cwe: Optional[str] = None
     cvss: Optional[Dict[str, Any]] = None
+    cvss_assessment: Optional[Dict[str, Any]] = None
+    severity_from_cvss: Optional[str] = None
+    cves: List[str] = []
+    cve_test_methods: List[str] = []
+    cve_poc: Optional[Dict[str, Any]] = None
     references: List[str] = []
     raw: Optional[Dict[str, Any]] = None
     timestamp: str
@@ -50,7 +56,10 @@ class Decision(BaseModel):
     branch: str
     result: str                       # PASS | FAIL
     total_findings: int
+    critical_high_count: int
     critical_high_findings: List[Finding]
+    cve_findings_count: int = 0
+    cve_poc_entries: List[Dict[str, Any]] = []
     all_findings: List[Finding]
     failed_tools: List[str]
     tool_summary: Dict[str, ToolSummary]
