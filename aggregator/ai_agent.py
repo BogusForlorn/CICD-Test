@@ -6,9 +6,20 @@ Never batches findings. Falls back to native remediation on error.
 import json
 import logging
 import re
+from urllib.parse import quote
 from typing import Any, Dict, Optional
 
+import requests
+
 log = logging.getLogger("ai_agent")
+
+DEFAULT_MODELS = {
+    "anthropic": "claude-opus-4-6",
+    "openai": "gpt-4o-mini",
+    "gemini": "gemini-1.5-pro",
+}
+SUPPORTED_PROVIDERS = tuple(DEFAULT_MODELS.keys())
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 REMEDIATION_SYSTEM = """You are a senior application security engineer providing remediation guidance.
 Given ONE security finding, return ONLY a valid JSON object — no markdown, no preamble.
@@ -66,10 +77,15 @@ Rules:
 
 
 class AIRemediationAgent:
-    def __init__(self, api_key: str, provider: str = "anthropic", model: str = "claude-opus-4-6"):
+    def __init__(self, api_key: str, provider: str = "anthropic", model: str = ""):
         self.api_key = api_key
-        self.provider = provider
-        self.model = model
+        self.provider = (provider or "anthropic").strip().lower()
+        self.model = (model or "").strip() or DEFAULT_MODELS.get(self.provider, "")
+        if self.provider not in SUPPORTED_PROVIDERS:
+            supported = ", ".join(SUPPORTED_PROVIDERS)
+            raise ValueError(f"Unknown provider: {self.provider}. Supported providers: {supported}")
+        if not self.model:
+            raise ValueError(f"No model configured for provider: {self.provider}")
         self._client = None
 
     def _get_client(self):
@@ -259,9 +275,45 @@ class AIRemediationAgent:
                 kwargs["response_format"] = {"type": "json_object"}
             resp = client.chat.completions.create(**kwargs)
             text = resp.choices[0].message.content
+        elif self.provider == "gemini":
+            text = self._invoke_gemini(system_prompt, prompt, max_tokens=max_tokens, as_json=as_json)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
         return text or ""
+
+    def _invoke_gemini(self, system_prompt: str, prompt: str, max_tokens: int, as_json: bool) -> str:
+        generation_config: Dict[str, Any] = {
+            "temperature": 0,
+            "maxOutputTokens": max_tokens,
+        }
+        if as_json:
+            generation_config["responseMimeType"] = "application/json"
+
+        payload = {
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": generation_config,
+        }
+        model = quote(self.model, safe="")
+        url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
+        resp = requests.post(url, params={"key": self.api_key}, json=payload, timeout=60)
+        if resp.status_code >= 400:
+            body = (resp.text or "").strip().replace("\n", " ")
+            raise RuntimeError(f"Gemini API error {resp.status_code}: {body[:400]}")
+
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            feedback = data.get("promptFeedback", {})
+            block_reason = feedback.get("blockReason", "no_candidates")
+            raise RuntimeError(f"Gemini response has no candidates: {block_reason}")
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text_chunks = [p.get("text", "") for p in parts if isinstance(p, dict)]
+        text = "".join(text_chunks).strip()
+        if not text:
+            raise RuntimeError("Gemini response did not include text output")
+        return text
 
     def _strip_code_fences(self, text: str) -> str:
         if text.startswith("```"):

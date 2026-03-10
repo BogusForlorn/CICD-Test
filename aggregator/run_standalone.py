@@ -41,7 +41,7 @@ PR_LABELS = os.environ.get("PR_LABELS", "").split(",")
 API_TOKEN = os.environ.get("API_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GITLAB_TOKEN", "")
 AI_API_KEY = os.environ.get("AI_API_KEY", "")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "anthropic")
-AI_MODEL = os.environ.get("AI_MODEL", "claude-opus-4-6")
+AI_MODEL = os.environ.get("AI_MODEL", "")
 RESULTS_BUCKET = os.environ.get("RESULTS_BUCKET", "")
 STORAGE_PROVIDER = os.environ.get("STORAGE_PROVIDER", "local")
 DEFECTDOJO_URL = os.environ.get("DEFECTDOJO_URL", "")
@@ -66,10 +66,19 @@ def main():
     # ── Enrich findings: remediation + CVSS + CVE/PoC ──────────────────────
     ai_enabled = bool(AI_API_KEY)
     cve_poc_enabled = os.environ.get("CVE_POC_ENABLED", "true").lower() == "true"
-    agent = AIRemediationAgent(AI_API_KEY, AI_PROVIDER, AI_MODEL) if ai_enabled else None
+    agent = None
+    if ai_enabled:
+        try:
+            agent = AIRemediationAgent(AI_API_KEY, AI_PROVIDER, AI_MODEL)
+            log.info("AI remediation enabled via provider=%s model=%s", agent.provider, agent.model)
+        except Exception as e:
+            ai_enabled = False
+            log.error("AI agent initialization failed: %s; continuing with native fallback", e)
 
     if not ai_enabled:
-        log.warning("AI_API_KEY not set — CVSS estimation and AI remediation fallback mode")
+        log.warning(
+            "AI remediation disabled — missing AI_API_KEY or invalid AI provider/model config"
+        )
 
     for i, finding in enumerate(findings):
         if ai_enabled and agent:

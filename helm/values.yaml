@@ -38,6 +38,9 @@ aggregator:
     repository: devsecops/aggregator
     tag: latest
     pullPolicy: Always
+  ai:
+    provider: anthropic  # anthropic | openai | gemini
+    model: ""            # leave empty to use provider default model
   service:
     type: ClusterIP
     port: 8001

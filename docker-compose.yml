@@ -43,7 +43,7 @@ services:
     environment:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_PROVIDER: ${AI_PROVIDER:-anthropic}
-      AI_MODEL: ${AI_MODEL:-claude-opus-4-6}
+      AI_MODEL: ${AI_MODEL:-}
       RESULTS_BUCKET: ${RESULTS_BUCKET:-}
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
       DEFECTDOJO_URL: ${DEFECTDOJO_URL:-}

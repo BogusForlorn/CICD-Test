@@ -21,14 +21,17 @@ and enforces a human-approval gate before any merge to main.
 
 1. Copy `.github/workflows/devsecops.yml` to your repo.
 2. Add GitHub Actions secrets:
-   - `AI_API_KEY` — Anthropic API key
+   - `AI_API_KEY` — API key for your selected AI provider (`anthropic`, `openai`, or `gemini`)
    - `RESULTS_BUCKET` — S3 bucket name (or skip for local)
    - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
    - `DEFECTDOJO_URL` / `DEFECTDOJO_TOKEN` (optional)
-3. Set branch protection on `main`:
+3. Set provider/model env vars (repository variables or workflow env):
+   - `AI_PROVIDER` — `anthropic` (default) | `openai` | `gemini`
+   - `AI_MODEL` — optional override; leave empty to use provider defaults
+4. Set branch protection on `main`:
    - Require status check: `devsecops/security-gate`
    - Block merges until check passes
-4. Push a PR — scans run automatically.
+5. Push a PR — scans run automatically.
 
 ### Self-hosted on Kubernetes
 
@@ -110,6 +113,15 @@ Webhook → Orchestrator → K8s Job (or Docker)
 
 Each repo can override defaults by committing `security-policy.yaml` to its root.
 See the included `security-policy.yaml` for all options.
+
+AI provider selection can be configured in either place:
+- Environment variables (`AI_PROVIDER`, `AI_MODEL`)
+- Repo policy (`policy.ai_remediation.provider`, `policy.ai_remediation.model`)
+
+If `model` is omitted/empty, provider defaults are used:
+- `anthropic` -> `claude-opus-4-6`
+- `openai` -> `gpt-4o-mini`
+- `gemini` -> `gemini-1.5-pro`
 
 ## Secrets Required
 

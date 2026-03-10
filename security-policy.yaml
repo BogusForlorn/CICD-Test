@@ -72,8 +72,8 @@ policy:
 
   ai_remediation:
     enabled: true
-    provider: anthropic
-    model: "claude-opus-4-6"
+    provider: anthropic   # anthropic | openai | gemini
+    model: ""             # optional; when empty, provider default model is used
     max_tokens: 1024
     fallback_to_native: true
 

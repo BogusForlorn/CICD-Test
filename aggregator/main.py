@@ -33,7 +33,7 @@ app = FastAPI(title="DevSecOps Aggregator", version="1.0.0")
 
 AI_API_KEY = os.environ.get("AI_API_KEY", "")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "anthropic")
-AI_MODEL = os.environ.get("AI_MODEL", "claude-opus-4-6")
+AI_MODEL = os.environ.get("AI_MODEL", "")
 RESULTS_BUCKET = os.environ.get("RESULTS_BUCKET", "")
 STORAGE_PROVIDER = os.environ.get("STORAGE_PROVIDER", "s3")  # s3 | azure_blob | local
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
@@ -66,11 +66,23 @@ async def aggregate(payload: dict):
     log.info("After deduplication: %d unique findings", len(findings))
 
     # ── 2. Enrich findings: remediation + CVSS + CVE/PoC ────────────────────
-    ai_enabled = policy.get("ai_remediation", {}).get("enabled", True) and bool(AI_API_KEY)
+    ai_remediation_config = policy.get("ai_remediation", {})
+    if not isinstance(ai_remediation_config, dict):
+        ai_remediation_config = {}
+    ai_enabled = ai_remediation_config.get("enabled", True) and bool(AI_API_KEY)
+    ai_provider = str(ai_remediation_config.get("provider") or AI_PROVIDER or "anthropic").strip()
+    ai_model = str(ai_remediation_config.get("model") or AI_MODEL or "").strip()
     cve_poc_enabled = policy.get("cve_testing", {}).get("enabled", True)
     cve_methods_config = policy.get("cve_testing", {}).get("methods", {})
     cvss_enabled = policy.get("cvss", {}).get("enabled", True)
-    agent = AIRemediationAgent(AI_API_KEY, AI_PROVIDER, AI_MODEL) if ai_enabled else None
+    agent = None
+    if ai_enabled:
+        try:
+            agent = AIRemediationAgent(AI_API_KEY, ai_provider, ai_model)
+            log.info("AI remediation enabled via provider=%s model=%s", agent.provider, agent.model)
+        except Exception as e:
+            ai_enabled = False
+            log.error("AI agent initialization failed: %s; continuing with native fallback", e)
 
     for i, finding in enumerate(findings):
         if ai_enabled and agent:

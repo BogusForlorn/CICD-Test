@@ -26,6 +26,10 @@ spec:
               value: "{{ .Values.global.storageProvider }}"
             - name: DASHBOARD_URL
               value: "{{ .Values.global.dashboardUrl }}"
+            - name: AI_PROVIDER
+              value: '{{ .Values.aggregator.ai.provider | default "anthropic" }}'
+            - name: AI_MODEL
+              value: '{{ .Values.aggregator.ai.model | default "" }}'
             - name: AI_API_KEY
               valueFrom:
                 secretKeyRef:
